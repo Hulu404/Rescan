@@ -5,6 +5,7 @@ import ExcelJS from 'exceljs';
 import {parsePower,clinicDate,normalizeSerial} from '../shared/label.js';
 import {parseModelText,parsePowerText,parseSerialText,vote,resolveZeroOh,modelAmbiguity,settleModel} from '../shared/fields.js';
 import {validateTelegram} from '../server/auth.js';
+import {createDownloadToken,verifyDownloadToken,downloadKey,DOWNLOAD_TTL_SECONDS} from '../server/download.js';
 import {createExcel} from '../server/excel.js';
 test('power accepts signed decimal comma and dot, rejects partial garbage',()=>{
  for(const [input,expected] of [['+20.5 D',20.5],['−2,5',-2.5],['0',0],['-0.75',-.75]])assert.equal(parsePower(input),expected);
@@ -101,6 +102,21 @@ test('real XLSX round trip has exactly four columns with date, numeric power, te
  assert.equal(sheet.getCell('B2').value,'=1+1');assert.equal(sheet.getCell('B2').type,ExcelJS.ValueType.String);
  assert.equal(sheet.getCell('C2').value,-2.5);assert.equal(sheet.getCell('C2').type,ExcelJS.ValueType.Number);
  assert.equal(sheet.getCell('D2').value,'001234 007');assert.equal(sheet.getCell('D2').type,ExcelJS.ValueType.String);
+});
+test('download link is bound to session and owner, expires, and resists tampering',()=>{
+ const key=downloadKey({TELEGRAM_BOT_TOKEN:'bot-token'}),now=Date.UTC(2026,10,19,12);
+ const subject={sessionId:'12345678-1234-1234-1234-123456789012',owner:'42'};
+ const token=createDownloadToken(subject,key,now);
+ assert.match(token,/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+ assert.deepEqual(verifyDownloadToken(token,key,now+1000),subject);
+ assert.throws(()=>verifyDownloadToken(token,key,now+(DOWNLOAD_TTL_SECONDS+1)*1000),/устарела/);
+ assert.throws(()=>verifyDownloadToken(token,downloadKey({TELEGRAM_BOT_TOKEN:'other'}),now));
+ const [payload,signature]=token.split('.');
+ const forged=Buffer.from(JSON.stringify({s:subject.sessionId,o:'43',e:Math.floor(now/1000)+300})).toString('base64url');
+ assert.throws(()=>verifyDownloadToken(`${forged}.${signature}`,key,now));
+ for(const bad of ['',payload,`${token}.x`,'a.b'])assert.throws(()=>verifyDownloadToken(bad,key,now));
+ assert.notDeepEqual(downloadKey({DOWNLOAD_SECRET:'s',TELEGRAM_BOT_TOKEN:'bot-token'}),key);
+ assert.throws(()=>downloadKey({}));
 });
 function signed(params,token){const data=Object.entries(params).sort(([a],[b])=>a<b?-1:1).map(([k,v])=>`${k}=${v}`).join('\n');const key=createHmac('sha256','WebAppData').update(token).digest();return new URLSearchParams({...params,hash:createHmac('sha256',key).update(data).digest('hex')}).toString();}
 test('Telegram signature, allowlist, freshness and tampering checks',()=>{

@@ -4,6 +4,7 @@ import { createWorker } from 'tesseract.js';
 import { clinicDate, parsePower } from '../shared/label.js';
 import { recognizeLabel } from './ocr/recognize.js';
 import { LabelFields, needsConfirmation } from './LabelFields.jsx';
+import { CameraCapture, canUseLiveCamera } from './CameraCapture.jsx';
 import './style.css';
 const tg=window.Telegram?.WebApp;
 async function api(path,body){
@@ -14,7 +15,10 @@ async function api(path,body){
 function Icon({name,size=24}){const paths={scan:<><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M4 12h16"/><path d="M8 8h8v8H8z"/></>,plus:<path d="M12 5v14M5 12h14"/>,camera:<><path d="M4 6h4l2-3h4l2 3h4v14H4z"/><circle cx="12" cy="12" r="4"/></>,image:<><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1"/><path d="m3 17 5-5 4 4 4-6 5 7"/></>,download:<path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/>,check:<path d="m5 12 4 4L19 6"/>,arrow:<path d="m14 6-6 6 6 6"/>};return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>}
 function App(){
  const [sessions,setSessions]=useState([]),[session,setSession]=useState(null),[rows,setRows]=useState([]),[zone,setZone]=useState('Europe/Moscow');
- const [busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[photo,setPhoto]=useState(''),[raw,setRaw]=useState(''),[fields,setFields]=useState({model:'',power:'',serial:''}),[review,setReview]=useState({}),[crops,setCrops]=useState({}),[confirmed,setConfirmed]=useState(false),[progress,setProgress]=useState(null),[download,setDownload]=useState('');
+ const [busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[photo,setPhoto]=useState(''),[raw,setRaw]=useState(''),[fields,setFields]=useState({model:'',power:'',serial:''}),[review,setReview]=useState({}),[crops,setCrops]=useState({}),[confirmed,setConfirmed]=useState(false),[progress,setProgress]=useState(null),[download,setDownload]=useState(''),[cameraOpen,setCameraOpen]=useState(false);
+ const inTelegram=Boolean(tg?.initData);
+ // Telegram's WebView ignores <a download>; its native downloader exists since Bot API 8.0.
+ const nativeDownload=inTelegram&&typeof tg.downloadFile==='function'&&tg.isVersionAtLeast?.('8.0');
  const camera=useRef(),gallery=useRef(),worker=useRef(),exportedFile=useRef(),draftId=useRef(crypto.randomUUID()),newId=useRef(crypto.randomUUID());
  async function run(fn){setBusy(true);setError('');setNotice('');try{await fn();}catch(e){setError(e.message);}finally{setBusy(false);}}
  async function refresh(){const data=await api('/sessions');setSessions(data.sessions);setZone(data.timeZone);}
@@ -39,8 +43,24 @@ function App(){
   const row=await api(`/sessions/${session.id}/lenses`,{id:draftId.current,...fields,power});
   setRows(old=>old.some(r=>r.id===row.id)?old:[...old,row]);clearDraft();setNotice('Линза добавлена. Можно сканировать следующую.');tg?.HapticFeedback?.notificationOccurred('success');
  });}
+ async function completeSession(){
+  if(session.completed_at)return;
+  await api(`/sessions/${session.id}/complete`,{});setSession({...session,completed_at:new Date().toISOString()});
+ }
+ async function sendToChat(){await run(async()=>{
+  await completeSession();
+  await api(`/sessions/${session.id}/excel-to-chat`,{});
+  setNotice('Excel отправлен в чат с ботом.');tg?.HapticFeedback?.notificationOccurred('success');
+ });}
  async function exportFile(){await run(async()=>{
-  if(!session.completed_at){await api(`/sessions/${session.id}/complete`,{});setSession({...session,completed_at:new Date().toISOString()});}
+  await completeSession();
+  if(nativeDownload){
+   const {path,fileName}=await api(`/sessions/${session.id}/excel-link`,{});
+   // Set before the call: the callback may fire immediately, and its result must not be overwritten.
+   setNotice('Подтвердите скачивание в окне Telegram.');
+   tg.downloadFile({url:location.origin+path,file_name:fileName},accepted=>setNotice(accepted?'Telegram скачивает файл — он появится в загрузках телефона.':'Скачивание отменено. Можно отправить файл в чат с ботом.'));
+   return;
+  }
   const blob=await api(`/sessions/${session.id}/excel`);exportedFile.current=new File([blob],`rescan-${session.id}.xlsx`,{type:blob.type});const url=URL.createObjectURL(blob);setDownload(url);
   const a=document.createElement('a');a.href=url;a.download=`rescan-${session.id}.xlsx`;document.body.append(a);a.click();a.remove();setNotice('Excel готов. Если загрузка не началась, нажмите ссылку ниже.');
  });}
@@ -55,11 +75,12 @@ function App(){
  <div className="session-bar"><button className="text-button" disabled={busy||!!photo} onClick={()=>run(async()=>{await refresh();setSession(null);})}><Icon name="arrow" size={17}/> Все сессии</button><span>№ {session.id.slice(0,8)} <b className="status">{session.completed_at?'Завершена':'В работе'}</b></span></div>
  <div className="workspace"><section className="capture card"><div className="section-heading"><h2>{session.completed_at?'Сессия завершена':'Этикетка линзы'}</h2><span className="muted">{session.completed_at?'✓':'Шаг 1 / 2'}</span></div>{!session.completed_at&&<><input ref={camera} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden onChange={e=>{scan(e.target.files[0]);e.target.value='';}}/><input ref={gallery} type="file" accept="image/jpeg,image/png,image/webp" hidden onChange={e=>{scan(e.target.files[0]);e.target.value='';}}/>
  {photo?<div className="photo"><img src={photo} alt="Сфотографированная этикетка линзы"/>{progress!==null&&<div className="ocr-progress" role="status">Распознаём текст… {progress}%</div>}</div>:<div className="capture-empty"><span className="camera-circle"><Icon name="camera" size={38}/></span><h3>Сфотографируйте этикетку</h3><p>Расположите её целиком в кадре.<br/>Избегайте бликов и размытия.</p></div>}
- <div className="capture-actions"><button className="primary" disabled={busy} onClick={()=>camera.current.click()}><Icon name="camera" size={20}/> Камера</button><button className="secondary" disabled={busy} onClick={()=>gallery.current.click()}><Icon name="image" size={20}/> Из галереи</button></div>
+ <div className="capture-actions"><button className="primary" disabled={busy} onClick={()=>canUseLiveCamera()?setCameraOpen(true):camera.current.click()}><Icon name="camera" size={20}/> Камера</button><button className="secondary" disabled={busy} onClick={()=>gallery.current.click()}><Icon name="image" size={20}/> Из галереи</button></div>
  {photo&&<form onSubmit={e=>{e.preventDefault();add();}}><div className="form-title"><h3>Проверьте данные</h3><span className="muted">Шаг 2 / 2</span></div><p className="hint">Значения считываются с текста этикетки. Пустые поля заполните вручную.</p><LabelFields fields={fields} review={review} crops={crops} disabled={busy} onChange={(key,value)=>setFields(old=>({...old,[key]:value}))}/>{needsConfirmation(review)&&<label className="confirm"><input type="checkbox" checked={confirmed} disabled={busy} onChange={e=>setConfirmed(e.target.checked)}/>Выделенные поля сверены с этикеткой</label>}<p className="hint">Дата сканирования проставляется при добавлении. Ведущие нули SN сохраняются.</p><div className="capture-actions"><button className="primary" disabled={busy} type="submit"><Icon name="plus" size={20}/> Добавить</button><button className="text-button" type="button" disabled={busy} onClick={clearDraft}>Отменить снимок</button></div>{raw&&<details><summary>Распознанный текст</summary><pre>{raw}</pre></details>}</form>}</>}
  {session.completed_at&&<div className="capture-empty"><span className="camera-circle"><Icon name="check" size={38}/></span><h3>Реестр готов</h3><p>Подтверждённые записи сохранены.<br/>Excel можно скачать повторно.</p></div>}</section>
- <section className="card registry"><div className="section-heading"><h2>Добавленные линзы</h2><span className="count">{rows.length}</span></div>{rows.length?<div className="lens-list">{[...rows].reverse().map((r,i)=><div className="lens" key={r.id}><span className="lens-number">{String(rows.length-i).padStart(2,'0')}</span><div><b>{r.model}</b><small>SN {r.serial}</small><small>{clinicDate(r.scanned_at,zone)}</small></div><strong>{Number(r.power)>0?'+':''}{r.power} D</strong></div>)}</div>:<div className="empty"><Icon name="scan" size={30}/><b>Пока ни одной линзы</b><p>Проверьте этикетку и нажмите «Добавить».</p></div>}<div className="export"><p><Icon name="check" size={16}/> Только подтверждённые записи</p><button className="primary full" disabled={busy||!rows.length||!!photo} onClick={exportFile}><Icon name="download" size={20}/>{session.completed_at?'Скачать Excel повторно':'Завершить и скачать Excel'}</button>{photo&&<small>Добавьте линзу или отмените снимок перед завершением.</small>}{download&&<a className="download-link" href={download} download={`rescan-${session.id}.xlsx`}>Сохранить готовый файл .xlsx</a>}</div></section></div></>}
+ <section className="card registry"><div className="section-heading"><h2>Добавленные линзы</h2><span className="count">{rows.length}</span></div>{rows.length?<div className="lens-list">{[...rows].reverse().map((r,i)=><div className="lens" key={r.id}><span className="lens-number">{String(rows.length-i).padStart(2,'0')}</span><div><b>{r.model}</b><small>SN {r.serial}</small><small>{clinicDate(r.scanned_at,zone)}</small></div><strong>{Number(r.power)>0?'+':''}{r.power} D</strong></div>)}</div>:<div className="empty"><Icon name="scan" size={30}/><b>Пока ни одной линзы</b><p>Проверьте этикетку и нажмите «Добавить».</p></div>}<div className="export"><p><Icon name="check" size={16}/> Только подтверждённые записи</p><button className="primary full" disabled={busy||!rows.length||!!photo} onClick={exportFile}><Icon name="download" size={20}/>{session.completed_at?'Скачать Excel повторно':'Завершить и скачать Excel'}</button>{inTelegram&&<button className="secondary full" disabled={busy||!rows.length||!!photo} onClick={sendToChat}>{session.completed_at?'Отправить Excel в чат':'Завершить и отправить в чат'}</button>}{photo&&<small>Добавьте линзу или отмените снимок перед завершением.</small>}{download&&<a className="download-link" href={download} download={`rescan-${session.id}.xlsx`}>Сохранить готовый файл .xlsx</a>}</div></section></div></>}
  {session&&download&&navigator.canShare&&<button className="text-button" disabled={busy} onClick={()=>run(async()=>{const file=exportedFile.current;if(!navigator.canShare({files:[file]}))throw new Error('Меню сохранения недоступно. Используйте ссылку на файл.');try{await navigator.share({files:[file]});}catch(e){if(e.name!=='AbortError')throw e;}})}>Сохранить / поделиться</button>}
+ {cameraOpen&&<CameraCapture onCapture={file=>{setCameraOpen(false);scan(file);}} onCancel={()=>setCameraOpen(false)} onGallery={()=>{setCameraOpen(false);gallery.current.click();}}/>}
  <footer><span><span className="footer-dot"/> ReScan · Внутренний инструмент клиники</span><span>Данные этикетки → Excel</span></footer></main></div>
 }
 createRoot(document.getElementById('root')).render(<App/>);

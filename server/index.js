@@ -3,6 +3,7 @@ import rateLimit from 'express-rate-limit';
 import { createClient } from '@supabase/supabase-js';
 import { validateTelegram } from './auth.js';
 import { createExcel } from './excel.js';
+import { createDownloadToken, downloadKey, verifyDownloadToken } from './download.js';
 import { normalizeSerial, parsePower } from '../shared/label.js';
 const app = express();
 const zone = process.env.CLINIC_TIMEZONE || 'Europe/Moscow';
@@ -16,6 +17,16 @@ const onRailway = Boolean(process.env.RAILWAY_ENVIRONMENT_NAME);
 if (onRailway) app.set('trust proxy', 1);
 app.use(express.json({limit:'16kb'}));
 app.use('/api',rateLimit({windowMs:60000,limit:120}));
+// Telegram's native downloader fetches this URL itself, without the init-data header:
+// the signed short-lived token in the path is the authorization. Must stay above the auth middleware.
+app.get('/api/download/:token',async(req,res)=>{
+ if (!db) return res.status(503).json({error:'Supabase ещё не настроен'});
+ let subject;
+ try { subject=verifyDownloadToken(req.params.token,downloadKey()); } catch(e) { return res.status(403).json({error:e.message}); }
+ const session=check(await db.from('rescan_sessions').select('*').eq('id',subject.sessionId).eq('owner_id',subject.owner).maybeSingle());
+ if(!session||!session.completed_at)return res.status(404).json({error:'Сессия не найдена или не завершена'});
+ sendExcel(res,session,await createExcel(await getRows(session.id),zone));
+});
 app.use('/api',(req,res,next) => {
  res.set('Cache-Control','no-store');
  if (!db) return res.status(503).json({error:'Supabase ещё не настроен. Укажите серверные переменные окружения и примените миграцию.'});
@@ -55,10 +66,40 @@ app.post('/api/sessions/:id/complete',async(req,res)=>{
  check(await db.from('rescan_sessions').update({completed_at:new Date().toISOString()}).eq('id',req.scanSession.id).eq('owner_id',req.owner).is('completed_at',null));
  res.json({ok:true});
 });
+const XLSX_TYPE='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+const excelName=session=>`rescan-${session.id.slice(0,8)}.xlsx`;
+function sendExcel(res,session,buffer){
+ // Telegram Web downloads cross-origin; the docs require this origin to be allowed.
+ res.set({'Content-Type':XLSX_TYPE,'Content-Disposition':`attachment; filename="${excelName(session)}"`,'Access-Control-Allow-Origin':'https://web.telegram.org'}).send(Buffer.from(buffer));
+}
+function requireCompleted(req,res){
+ if(req.scanSession.completed_at)return true;
+ res.status(409).json({error:'Сначала завершите сессию'});
+ return false;
+}
 app.get('/api/sessions/:id/excel',async(req,res)=>{
- if(!req.scanSession.completed_at)return res.status(409).json({error:'Сначала завершите сессию'});
+ if(!requireCompleted(req,res))return;
+ sendExcel(res,req.scanSession,await createExcel(await getRows(req.scanSession.id),zone));
+});
+// Link for WebApp.downloadFile: the client adds its own origin, Telegram then fetches /api/download/<token>.
+app.post('/api/sessions/:id/excel-link',(req,res)=>{
+ if(!requireCompleted(req,res))return;
+ let key;
+ try { key=downloadKey(); } catch(e) { console.error(e.message); return res.status(503).json({error:'Скачивание не настроено на сервере'}); }
+ res.json({path:`/api/download/${createDownloadToken({sessionId:req.scanSession.id,owner:req.owner},key)}`,fileName:excelName(req.scanSession)});
+});
+// Works on any Telegram version: the bot sends the file into the employee's chat with it.
+app.post('/api/sessions/:id/excel-to-chat',async(req,res)=>{
+ if(!requireCompleted(req,res))return;
+ if(!/^\d+$/.test(req.owner))return res.status(400).json({error:'Отправка в чат доступна только при входе из Telegram'});
  const buffer=await createExcel(await getRows(req.scanSession.id),zone);
- res.set({'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','Content-Disposition':`attachment; filename="rescan-${req.scanSession.id}.xlsx"`}).send(Buffer.from(buffer));
+ const form=new FormData();
+ form.append('chat_id',req.owner);
+ form.append('caption',`ReScan · сессия № ${req.scanSession.id.slice(0,8)}`);
+ form.append('document',new Blob([buffer],{type:XLSX_TYPE}),excelName(req.scanSession));
+ const sent=await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendDocument`,{method:'POST',body:form}).then(r=>r.json()).catch(()=>({ok:false,description:'network'}));
+ if(!sent.ok){console.error('sendDocument failed',sent.error_code,sent.description);return res.status(502).json({error:'Не удалось отправить файл в чат. Откройте чат с ботом, нажмите «Старт» и повторите'});}
+ res.json({ok:true});
 });
 app.use('/api',(req,res)=>res.status(404).json({error:'Неизвестный запрос'}));
 app.use(express.static('dist'));
