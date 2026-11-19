@@ -1,0 +1,46 @@
+{
+  "_about": "Эталон составлен человеком по изображению, не по OCR. uncertain — символы, которые на снимке визуально неоднозначны. cyl — справочно, в ocr-eval не оценивается.",
+  "alcon-clareon-toric-01.png": {
+    "model": "CNW0T2",
+    "power": "+20.5",
+    "serial": "26187115 027",
+    "uncertain": {
+      "model": "4-й символ визуально O/0: узкий овал, ширина как у цифр. Принят 0 — в номенклатуре Alcon модели Clareon Toric записываются CNW0T2…CNW0T9. Подтверждено чистым снимком той же линзы (toric-06)."
+    },
+    "notes": "Снимок с красной разметкой поверх этикетки: линии частично закрывают низ '+20.5D' и нижнюю половину цифр SN. Та же линза, что alcon-clareon-toric-06.jpg."
+  },
+  "alcon-clareon-02.jpg": {
+    "model": "SY60WF",
+    "power": "+22.5",
+    "serial": "26174807 015",
+    "notes": "Clareon IOL (монофокальная, не торическая) — CYL нет. Чистый снимок."
+  },
+  "alcon-clareon-toric-03.jpg": {
+    "model": "PXYWT3",
+    "power": "+10.0",
+    "serial": "16205948 025",
+    "cyl": "1.50",
+    "notes": "Clareon PanOptix Pro TORIC. Рядом с силой мелкий текст: CYL 1.50, +2.17 ADD, +3.25 ADD — ADD-значения не должны попасть в power."
+  },
+  "alcon-clareon-toric-04.jpg": {
+    "model": "PXYWT4",
+    "power": "+7.0",
+    "serial": "16206097 059",
+    "cyl": "2.25",
+    "notes": "Clareon PanOptix Pro TORIC. На этикетке '+7.0 D' с пробелом перед D. Рядом CYL 2.25, +2.17 ADD, +3.25 ADD."
+  },
+  "alcon-clareon-toric-05.jpg": {
+    "model": "CNW0T3",
+    "power": "+19.0",
+    "serial": "26168203 001",
+    "cyl": "1.50",
+    "notes": "Clareon TORIC. Чистый снимок."
+  },
+  "alcon-clareon-toric-06.jpg": {
+    "model": "CNW0T2",
+    "power": "+20.5",
+    "serial": "26187115 027",
+    "cyl": "1.00",
+    "notes": "Clareon TORIC. Та же линза, что alcon-clareon-toric-01.png, но без разметки; справа синий штрих ручкой."
+  }
+}

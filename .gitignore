@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+test-results/
+playwright-report/
+.npm-cache/
+eng.traineddata
+samples/labels/*.png
+samples/labels/*.jpg
+samples/labels/*.jpeg
+samples/labels/*.webp
