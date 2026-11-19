@@ -10,6 +10,10 @@ new Intl.DateTimeFormat('ru-RU',{timeZone:zone});
 const db = process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY ? createClient(process.env.SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY,{auth:{persistSession:false,autoRefreshToken:false}}) : null;
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 app.disable('x-powered-by');
+// On Railway the app sits behind one proxy: it must listen on all interfaces, and the client IP
+// (for rate limiting) comes from X-Forwarded-For. Locally it stays on loopback only.
+const onRailway = Boolean(process.env.RAILWAY_ENVIRONMENT_NAME);
+if (onRailway) app.set('trust proxy', 1);
 app.use(express.json({limit:'16kb'}));
 app.use('/api',rateLimit({windowMs:60000,limit:120}));
 app.use('/api',(req,res,next) => {
@@ -60,4 +64,4 @@ app.use('/api',(req,res)=>res.status(404).json({error:'Неизвестный з
 app.use(express.static('dist'));
 app.get('/{*path}',(req,res)=>res.sendFile('index.html',{root:'dist'}));
 app.use((err,req,res,next)=>{console.error(err.message);res.status(err.status||500).json({error:err.status ? err.message : 'Ошибка сервера. Повторите попытку.'});});
-app.listen(process.env.PORT||3001,'127.0.0.1',()=>console.log('ReScan API ready'));
+app.listen(process.env.PORT||3001,process.env.HOST||(onRailway?'0.0.0.0':'127.0.0.1'),()=>console.log('ReScan API ready'));
