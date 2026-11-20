@@ -1,7 +1,7 @@
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import { createClient } from '@supabase/supabase-js';
-import { validateTelegram } from './auth.js';
+import { validateTelegram, parseAllowedUsernames } from './auth.js';
 import { createExcel } from './excel.js';
 import { createDownloadToken, downloadKey, verifyDownloadToken } from './download.js';
 import { normalizeSerial, parsePower } from '../shared/label.js';
@@ -31,7 +31,7 @@ app.use('/api',(req,res,next) => {
  res.set('Cache-Control','no-store');
  if (!db) return res.status(503).json({error:'Supabase ещё не настроен. Укажите серверные переменные окружения и примените миграцию.'});
  try {
-  req.owner = process.env.DEV_AUTH === 'true' && process.env.NODE_ENV !== 'production' && ['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress) ? 'local-developer' : validateTelegram(req.get('X-Telegram-Init-Data') || '',process.env.TELEGRAM_BOT_TOKEN || '',(process.env.ALLOWED_TELEGRAM_IDS || '').split(',').map(s=>s.trim()));
+  req.owner = process.env.DEV_AUTH === 'true' && process.env.NODE_ENV !== 'production' && ['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress) ? 'local-developer' : validateTelegram(req.get('X-Telegram-Init-Data') || '',process.env.TELEGRAM_BOT_TOKEN || '',parseAllowedUsernames(process.env.ALLOWED_TELEGRAM_USERNAMES));
   next();
  } catch(e) {res.status(401).json({error:e.message});}
 });

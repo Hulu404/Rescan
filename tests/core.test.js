@@ -4,7 +4,7 @@ import {createHmac} from 'node:crypto';
 import ExcelJS from 'exceljs';
 import {parsePower,clinicDate,normalizeSerial} from '../shared/label.js';
 import {parseModelText,parsePowerText,parseSerialText,vote,resolveZeroOh,modelAmbiguity,settleModel} from '../shared/fields.js';
-import {validateTelegram} from '../server/auth.js';
+import {validateTelegram,parseAllowedUsernames} from '../server/auth.js';
 import {createDownloadToken,verifyDownloadToken,downloadKey,DOWNLOAD_TTL_SECONDS} from '../server/download.js';
 import {createExcel} from '../server/excel.js';
 test('power accepts signed decimal comma and dot, rejects partial garbage',()=>{
@@ -120,11 +120,18 @@ test('download link is bound to session and owner, expires, and resists tamperin
 });
 function signed(params,token){const data=Object.entries(params).sort(([a],[b])=>a<b?-1:1).map(([k,v])=>`${k}=${v}`).join('\n');const key=createHmac('sha256','WebAppData').update(token).digest();return new URLSearchParams({...params,hash:createHmac('sha256',key).update(data).digest('hex')}).toString();}
 test('Telegram signature, allowlist, freshness and tampering checks',()=>{
- const now=Date.now();const token='test-token';const raw=signed({auth_date:String(Math.floor(now/1000)),user:JSON.stringify({id:42})},token);
- assert.equal(validateTelegram(raw,token,['42'],now),'42');
- assert.throws(()=>validateTelegram(raw,token,['43'],now));
- assert.throws(()=>validateTelegram(raw,'wrong',['42'],now));
- assert.throws(()=>validateTelegram(raw,token,['42'],now+86401000));
- assert.throws(()=>validateTelegram(raw+'&user=%7B%22id%22%3A43%7D',token,['42'],now));
- assert.throws(()=>validateTelegram('',token,['42'],now));
+ const now=Date.now();const token='test-token';const auth_date=String(Math.floor(now/1000));
+ const raw=signed({auth_date,user:JSON.stringify({id:42,username:'Ivan_Petrov'})},token);
+ const allowed=parseAllowedUsernames(' @ivan_petrov , @Other_User,bad name,@x ');
+ assert.deepEqual(allowed,['ivan_petrov','other_user']);
+ // owner stays the numeric ID; username match is case-insensitive
+ assert.equal(validateTelegram(raw,token,allowed,now),'42');
+ assert.throws(()=>validateTelegram(raw,token,['other_user'],now),/Нет доступа/);
+ assert.throws(()=>validateTelegram(raw,token,[],now),/Нет доступа/);
+ const noName=signed({auth_date,user:JSON.stringify({id:42})},token);
+ assert.throws(()=>validateTelegram(noName,token,allowed,now),/никнейм/);
+ assert.throws(()=>validateTelegram(raw,'wrong',allowed,now));
+ assert.throws(()=>validateTelegram(raw,token,allowed,now+86401000));
+ assert.throws(()=>validateTelegram(raw+'&user=%7B%22id%22%3A43%2C%22username%22%3A%22other_user%22%7D',token,allowed,now));
+ assert.throws(()=>validateTelegram('',token,allowed,now));
 });
