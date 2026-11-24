@@ -1,7 +1,7 @@
 // Label recognition: locate the model plate, align, OCR each field window in several
 // preprocessing variants and keep only values the variants agree on.
 import { darkComponents, loadBitmap, renderRegion, renderRotatedWindow, toneCanvas } from './image.js';
-import { findModelPlate } from './locate.js';
+import { findFramedPlate, findModelPlate } from './locate.js';
 import { modelAmbiguity, parseModelText, parsePowerText, parseSerialText, resolveZeroOh, settleModel, vote } from '../../shared/fields.js';
 
 // Field windows relative to the plate centre. left/right are in plate length (L); top/bottom are in
@@ -40,9 +40,11 @@ const AUTO_PAGE = '3';
 /**
  * @param {Blob} file  photo from camera or gallery
  * @param {{recognize:Function,setParameters:Function}} worker  tesseract.js worker ('eng')
+ * @param {{framed?:boolean}} [options]  framed: the photo is the camera guide area, so the target label is
+ *   the one in its middle and labels cut by the border are neighbours
  * @returns {Promise<{fields:{model:string,power:string,serial:string}, review:object, crops:object, raw:string, method:string}>}
  */
-export async function recognizeLabel(file, worker) {
+export async function recognizeLabel(file, worker, { framed = false } = {}) {
   let bitmap;
   try {
     bitmap = await loadBitmap(file);
@@ -51,13 +53,27 @@ export async function recognizeLabel(file, worker) {
     return readPages([{ label: 'файл', image: () => file }], worker, 'undecoded-file');
   }
   try {
-    const plate = findModelPlate(bitmap);
+    const target = framed ? findFramedPlate(bitmap) : null;
+    // Only neighbouring or cut labels are in the guide: reading the page would return someone else's values.
+    if (target && !target.plate && target.found > 0) return emptyResult('misframed', MISFRAMED_NOTE);
+    const plate = target ? target.plate : findModelPlate(bitmap);
     const located = plate ? await recognizeByPlate(bitmap, plate, worker) : null;
     if (located && located.found > 0) return located.result;
+    if (framed && plate) return emptyResult('unreadable', UNREADABLE_NOTE);
     return await recognizeWholeImage(bitmap, worker);
   } finally {
     bitmap.close?.();
   }
+}
+
+const MISFRAMED_NOTE = 'Этикетка в рамке не целиком или не по центру — переснимите';
+const UNREADABLE_NOTE = 'Этикетка в рамке не читается — переснимите ближе и без бликов';
+
+/** Nothing is filled: the target label could not be read, and other text in the guide may be a neighbour's. */
+function emptyResult(method, note) {
+  const names = Object.keys(WINDOWS);
+  const review = Object.fromEntries(names.map(name => [name, { status: 'missing', candidates: [], needsCheck: true, note }]));
+  return { fields: Object.fromEntries(names.map(name => [name, ''])), review, crops: {}, raw: '', method };
 }
 
 async function recognizeByPlate(bitmap, plate, worker) {

@@ -23,10 +23,52 @@ function isPlateBlue(r, g, b) {
 }
 
 /**
+ * The largest plate of the photo.
  * @returns {null | {cx:number, cy:number, angle:number, length:number, thickness:number}}
  *   centre and size in source pixels, angle (radians) of the long axis.
  */
 export function findModelPlate(source) {
+  return detectPlates(source).reduce((best, plate) => (!best || plate.area > best.area ? plate : best), null);
+}
+
+// In a guide-cropped photo the label fills the frame: its plate is about 0.3 of the frame width. Anything much
+// shorter is other blue print (the "Alcon" logo is about 0.11) or a label too far away to read.
+const MIN_FRAMED_LENGTH_SHARE = 0.15;
+// Label centre relative to the plate centre, in plate lengths along and across the plate (measured on toric-01).
+const LABEL_CENTRE = { along: 0.95, across: 0.31 };
+
+// The label centre must be this close to the photo centre, as a share of the photo side; otherwise it is a neighbour.
+const MAX_OFF_CENTRE = 0.25;
+
+/**
+ * The plate of the label in the middle of a guide-cropped photo. Plates cut by the border and labels lying
+ * off-centre belong to neighbours and are never returned.
+ * @returns {{plate: null | {cx:number, cy:number, angle:number, length:number, thickness:number}, found:number}}
+ *   found: plates of readable size in the photo, including rejected ones
+ */
+export function findFramedPlate(source) {
+  const plates = detectPlates(source).filter(p => p.length >= MIN_FRAMED_LENGTH_SHARE * source.width);
+  const ranked = plates
+    .filter(p => !p.touchesBorder)
+    .map(plate => ({ plate, offset: labelOffset(plate, source) }))
+    .filter(({ offset }) => offset <= MAX_OFF_CENTRE)
+    .sort((a, b) => a.offset - b.offset);
+  return { plate: ranked[0]?.plate ?? null, found: plates.length };
+}
+
+/** Label centre to photo centre as a share of the photo side; the label may be upside down, so the nearer reading counts. */
+function labelOffset(plate, source) {
+  const cos = Math.cos(plate.angle), sin = Math.sin(plate.angle);
+  const along = LABEL_CENTRE.along * plate.length, across = LABEL_CENTRE.across * plate.length;
+  const dx = along * cos - across * sin, dy = along * sin + across * cos;
+  return Math.min(...[1, -1].map(side => Math.max(
+    Math.abs(plate.cx + side * dx - source.width / 2) / source.width,
+    Math.abs(plate.cy + side * dy - source.height / 2) / source.height,
+  )));
+}
+
+/** All plate-like regions, in source pixels. */
+function detectPlates(source) {
   const scale = Math.min(1, ANALYSIS_MAX_SIDE / Math.max(source.width, source.height));
   const width = Math.max(1, Math.round(source.width * scale));
   const height = Math.max(1, Math.round(source.height * scale));
@@ -39,18 +81,17 @@ export function findModelPlate(source) {
 
   const mask = new Uint8Array(width * height);
   for (let i = 0, j = 0; j < mask.length; i += 4, j++) mask[j] = isPlateBlue(px[i], px[i + 1], px[i + 2]) ? 1 : 0;
-  closeHoles(mask, width, height);
+  const closed = closeHoles(mask, width, height);
 
-  const best = largestPlateComponent(mask, width, height);
-  if (!best) return null;
-  return { cx: best.cx / scale, cy: best.cy / scale, angle: best.angle, length: best.length / scale, thickness: best.thickness / scale };
+  return plateComponents(closed, mask, width, height).map(({ n, cx, cy, angle, length, thickness, touchesBorder }) => ({
+    cx: cx / scale, cy: cy / scale, angle, length: length / scale, thickness: thickness / scale, area: n, touchesBorder,
+  }));
 }
 
 // White letters punch holes into the blue mask; a horizontal+vertical dilation then erosion closes them.
 function closeHoles(mask, width, height, radius = 3) {
   const dilated = morph(mask, width, height, radius, 1);
-  const closed = morph(dilated, width, height, radius, 0);
-  mask.set(closed);
+  return morph(dilated, width, height, radius, 0);
 }
 
 function morph(mask, width, height, radius, value) {
@@ -70,21 +111,23 @@ function morph(mask, width, height, radius, value) {
   return pass(pass(mask, true), false);
 }
 
-function largestPlateComponent(mask, width, height) {
+// `raw` is the mask before closing: closing stretches a plate lying a few pixels from the border up to it.
+function plateComponents(mask, raw, width, height) {
   const seen = new Uint8Array(mask.length);
   const stack = new Int32Array(mask.length);
   const members = new Int32Array(mask.length);
   const minArea = width * height * MIN_AREA_SHARE;
-  let best = null;
+  const plates = [];
   for (let start = 0; start < mask.length; start++) {
     if (!mask[start] || seen[start]) continue;
-    let top = 0, n = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+    let top = 0, n = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0, touchesBorder = false;
     stack[top++] = start;
     seen[start] = 1;
     while (top) {
       const p = stack[--top];
       members[n] = p;
       const x = p % width, y = (p - x) / width;
+      if (raw[p] && (x === 0 || y === 0 || x === width - 1 || y === height - 1)) touchesBorder = true;
       n++; sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y;
       for (const q of [p - 1, p + 1, p - width, p + width]) {
         if (q < 0 || q >= mask.length || seen[q] || !mask[q]) continue;
@@ -103,11 +146,10 @@ function largestPlateComponent(mask, width, height) {
     const length = Math.sqrt(12 * l1), thickness = Math.sqrt(12 * l2);
     const elongation = length / thickness, fill = n / (length * thickness);
     if (elongation < MIN_ELONGATION || elongation > MAX_ELONGATION || fill < MIN_FILL) continue;
-    if (best && n <= best.n) continue;
     const angle = 0.5 * Math.atan2(2 * mu11, mu20 - mu02);
-    best = { n, angle, ...orientedExtent(members.subarray(0, n), width, cx, cy, angle) };
+    plates.push({ n, angle, touchesBorder, ...orientedExtent(members.subarray(0, n), width, cx, cy, angle) });
   }
-  return best;
+  return plates;
 }
 
 // Share of pixels trimmed at each end of the extent, so stray edge pixels do not widen the box.

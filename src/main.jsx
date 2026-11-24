@@ -28,13 +28,13 @@ function App(){
  useEffect(()=>{if(photo)tg?.enableClosingConfirmation?.();else tg?.disableClosingConfirmation?.();const handler=e=>{if(photo){e.preventDefault();e.returnValue='';}};window.addEventListener('beforeunload',handler);return()=>window.removeEventListener('beforeunload',handler);},[photo]);
  function clearDraft(){setPhoto('');setRaw('');setFields({model:'',power:'',serial:''});setReview({});setCrops({});setConfirmed(false);draftId.current=crypto.randomUUID();}
  async function open(id){const data=await api('/sessions/'+id);setSession(data.session);setRows(data.rows);setDownload('');clearDraft();}
- async function scan(file){if(!file)return;await run(async()=>{
+ async function scan(file,{framed=false}={}){if(!file)return;await run(async()=>{
   if(!/^image\/(jpeg|png|webp|bmp)$/.test(file.type))throw new Error('Выберите фотографию JPEG, PNG или WebP. Для HEIC сначала сохраните копию в JPEG.');
   if(file.size>20*1024*1024)throw new Error('Фотография должна быть меньше 20 МБ');
   clearDraft();setPhoto(URL.createObjectURL(file));setProgress(0);
   try{
    if(!worker.current)worker.current=await createWorker('eng',1,{logger:m=>{if(m.status==='recognizing text')setProgress(Math.round(m.progress*100));}});
-   const result=await recognizeLabel(file,worker.current);setRaw(result.raw);setFields(result.fields);setReview(result.review);setCrops(result.crops);setNotice('Проверьте все три поля по фотографии перед добавлением.');
+   const result=await recognizeLabel(file,worker.current,{framed});setRaw(result.raw);setFields(result.fields);setReview(result.review);setCrops(result.crops);setNotice('Проверьте все три поля по фотографии перед добавлением.');
   }catch(e){console.error('OCR failed',e);throw new Error('Не удалось распознать фотографию. Заполните поля по этикетке или сделайте новый снимок.');}finally{setProgress(null);}
  });}
  async function add(){await run(async()=>{
@@ -80,7 +80,7 @@ function App(){
  {session.completed_at&&<div className="capture-empty"><span className="camera-circle"><Icon name="check" size={38}/></span><h3>Реестр готов</h3><p>Подтверждённые записи сохранены.<br/>Excel можно скачать повторно.</p></div>}</section>
  <section className="card registry"><div className="section-heading"><h2>Добавленные линзы</h2><span className="count">{rows.length}</span></div>{rows.length?<div className="lens-list">{[...rows].reverse().map((r,i)=><div className="lens" key={r.id}><span className="lens-number">{String(rows.length-i).padStart(2,'0')}</span><div><b>{r.model}</b><small>SN {r.serial}</small><small>{clinicDate(r.scanned_at,zone)}</small></div><strong>{Number(r.power)>0?'+':''}{r.power} D</strong></div>)}</div>:<div className="empty"><Icon name="scan" size={30}/><b>Пока ни одной линзы</b><p>Проверьте этикетку и нажмите «Добавить».</p></div>}<div className="export"><p><Icon name="check" size={16}/> Только подтверждённые записи</p><button className="primary full" disabled={busy||!rows.length||!!photo} onClick={exportFile}><Icon name="download" size={20}/>{session.completed_at?'Скачать Excel повторно':'Завершить и скачать Excel'}</button>{inTelegram&&<button className="secondary full" disabled={busy||!rows.length||!!photo} onClick={sendToChat}>{session.completed_at?'Отправить Excel в чат':'Завершить и отправить в чат'}</button>}{photo&&<small>Добавьте линзу или отмените снимок перед завершением.</small>}{download&&<a className="download-link" href={download} download={`rescan-${session.id}.xlsx`}>Сохранить готовый файл .xlsx</a>}</div></section></div></>}
  {session&&download&&navigator.canShare&&<button className="text-button" disabled={busy} onClick={()=>run(async()=>{const file=exportedFile.current;if(!navigator.canShare({files:[file]}))throw new Error('Меню сохранения недоступно. Используйте ссылку на файл.');try{await navigator.share({files:[file]});}catch(e){if(e.name!=='AbortError')throw e;}})}>Сохранить / поделиться</button>}
- {cameraOpen&&<CameraCapture onCapture={file=>{setCameraOpen(false);scan(file);}} onCancel={()=>setCameraOpen(false)} onGallery={()=>{setCameraOpen(false);gallery.current.click();}}/>}
+ {cameraOpen&&<CameraCapture onCapture={file=>{setCameraOpen(false);scan(file,{framed:true});}} onCancel={()=>setCameraOpen(false)} onGallery={()=>{setCameraOpen(false);gallery.current.click();}}/>}
  <footer><span><span className="footer-dot"/> ReScan · Внутренний инструмент клиники</span><span>Данные этикетки → Excel</span></footer></main></div>
 }
 createRoot(document.getElementById('root')).render(<App/>);

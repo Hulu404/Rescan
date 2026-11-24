@@ -68,6 +68,23 @@ test('camera button shoots in-app through getUserMedia, not the file picker',asy
  await expect(page.getByLabel('Серийный номер (SN)')).toHaveValue('001234 007');
  expect(chooser).toBe(false);
 });
+test('only the area inside the guide is photographed',async({page})=>{
+ await page.setViewportSize({width:390,height:844});
+ const session=session0();
+ // Red everywhere except a green band just around the guide: 348–471 CSS px of 844 → 793–1071 of 1920.
+ await page.addInitScript(()=>{navigator.mediaDevices.getUserMedia=async()=>{const c=document.createElement('canvas');c.width=1080;c.height=1920;const x=c.getContext('2d');const draw=()=>{x.fillStyle='#f00';x.fillRect(0,0,1080,1920);x.fillStyle='#0f0';x.fillRect(0,780,1080,305);requestAnimationFrame(draw);};draw();return c.captureStream(30);};});
+ await page.route('**/tesseract__js.js*',route=>route.fulfill({contentType:'application/javascript',body:OCR_STUB}));
+ await page.route('**/api/**',route=>{const path=new URL(route.request().url()).pathname;if(path==='/api/sessions'&&route.request().method()==='POST')return route.fulfill({json:session});if(path==='/api/sessions')return route.fulfill({json:{sessions:[],timeZone:'Europe/Moscow'}});return route.fulfill({json:{session,rows:[]}});});
+ await page.goto('/');await page.getByRole('button',{name:'Начать сканирование'}).click();
+ await page.getByRole('button',{name:'Камера',exact:true}).click();
+ await page.getByRole('button',{name:'Снять'}).click();
+ const photo=page.getByAltText('Сфотографированная этикетка линзы');
+ await expect(photo).toBeVisible();
+ const shot=await photo.evaluate(async img=>{await img.decode();const c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;const x=c.getContext('2d');x.drawImage(img,0,0);const px=x.getImageData(0,0,c.width,c.height).data;let red=0;for(let i=0;i<px.length;i+=4)if(px[i]>128)red++;return {width:c.width,height:c.height,red};});
+ expect(shot.red).toBe(0);
+ expect(Math.abs(shot.width-781)).toBeLessThanOrEqual(3);
+ expect(Math.abs(shot.height-279)).toBeLessThanOrEqual(3);
+});
 test('camera refusal offers the gallery instead of a dead end',async({page})=>{
  const session=session0();
  await page.addInitScript(()=>{navigator.mediaDevices.getUserMedia=async()=>{throw new DOMException('denied','NotAllowedError');};});

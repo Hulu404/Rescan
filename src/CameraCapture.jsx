@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { coverRegion } from '../shared/frame.js';
 
 // In-app camera via getUserMedia. Telegram's Android WebView ignores <input capture> and opens the
 // gallery instead (bugs.telegram.org/c/44936), so the live stream is the reliable way to shoot.
@@ -18,10 +19,12 @@ function cameraError(error) {
 
 /**
  * Full-screen camera with a framing guide and a shutter button.
+ * Only the area inside the guide is photographed; the rest of the view is never captured.
  * @param {{onCapture:(file:File)=>void, onCancel:()=>void, onGallery:()=>void}} props
  */
 export function CameraCapture({ onCapture, onCancel, onGallery }) {
   const video = useRef(null);
+  const guide = useRef(null);
   const stream = useRef(null);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState('');
@@ -42,12 +45,14 @@ export function CameraCapture({ onCapture, onCancel, onGallery }) {
   }, []);
 
   function handleShoot() {
-    const { videoWidth: width, videoHeight: height } = video.current;
-    if (!width || !height) return;
+    const frame = { width: video.current.videoWidth, height: video.current.videoHeight };
+    const region = coverRegion(frame, video.current.getBoundingClientRect(), guide.current.getBoundingClientRect());
+    if (!region) { console.error('Guide is outside the video frame', frame); setError('Не удалось сделать снимок. Попробуйте ещё раз.'); return; }
+    const { x, y, width, height } = region;
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
-    canvas.getContext('2d').drawImage(video.current, 0, 0, width, height);
+    canvas.getContext('2d').drawImage(video.current, x, y, width, height, 0, 0, width, height);
     canvas.toBlob(blob => {
       if (!blob) { setError('Не удалось сохранить снимок. Попробуйте ещё раз.'); return; }
       onCapture(new File([blob], `label-${Date.now()}.jpg`, { type: 'image/jpeg' }));
@@ -57,8 +62,8 @@ export function CameraCapture({ onCapture, onCancel, onGallery }) {
   return (
     <div className="camera" role="dialog" aria-modal="true" aria-label="Съёмка этикетки">
       <video ref={video} className="camera-video" playsInline muted autoPlay />
-      {!error && <div className="camera-guide" aria-hidden="true" />}
-      <p className="camera-hint">{error || (ready ? 'Этикетка целиком в рамке, без бликов' : 'Включаем камеру…')}</p>
+      {!error && <div ref={guide} className="camera-guide" aria-hidden="true" />}
+      <p className="camera-hint">{error || (ready ? 'Одна этикетка целиком в рамке, без бликов. Всё за рамкой не снимается' : 'Включаем камеру…')}</p>
       <div className="camera-actions">
         <button type="button" className="camera-cancel" onClick={onCancel}>Отмена</button>
         {error
