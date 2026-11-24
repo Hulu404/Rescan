@@ -3,11 +3,15 @@ import rateLimit from 'express-rate-limit';
 import { createClient } from '@supabase/supabase-js';
 import { validateTelegram, parseAllowedUsernames } from './auth.js';
 import { createExcel } from './excel.js';
+import { missingCustomerFields, readCustomer } from './customer.js';
 import { createDownloadToken, downloadKey, verifyDownloadToken } from './download.js';
 import { normalizeSerial, parsePower } from '../shared/label.js';
 const app = express();
 const zone = process.env.CLINIC_TIMEZONE || 'Europe/Moscow';
 new Intl.DateTimeFormat('ru-RU',{timeZone:zone});
+const customer = readCustomer();
+const missingCustomer = missingCustomerFields();
+if (missingCustomer.length) console.warn('Excel header will be incomplete, not set:', missingCustomer.join(', '));
 const db = process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY ? createClient(process.env.SUPABASE_URL,process.env.SUPABASE_SERVICE_ROLE_KEY,{auth:{persistSession:false,autoRefreshToken:false}}) : null;
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 app.disable('x-powered-by');
@@ -25,7 +29,7 @@ app.get('/api/download/:token',async(req,res)=>{
  try { subject=verifyDownloadToken(req.params.token,downloadKey()); } catch(e) { return res.status(403).json({error:e.message}); }
  const session=check(await db.from('rescan_sessions').select('*').eq('id',subject.sessionId).eq('owner_id',subject.owner).maybeSingle());
  if(!session||!session.completed_at)return res.status(404).json({error:'Сессия не найдена или не завершена'});
- sendExcel(res,session,await createExcel(await getRows(session.id),zone));
+ sendExcel(res,session,await createExcel(await getRows(session.id),customer));
 });
 app.use('/api',(req,res,next) => {
  res.set('Cache-Control','no-store');
@@ -79,7 +83,7 @@ function requireCompleted(req,res){
 }
 app.get('/api/sessions/:id/excel',async(req,res)=>{
  if(!requireCompleted(req,res))return;
- sendExcel(res,req.scanSession,await createExcel(await getRows(req.scanSession.id),zone));
+ sendExcel(res,req.scanSession,await createExcel(await getRows(req.scanSession.id),customer));
 });
 // Link for WebApp.downloadFile: the client adds its own origin, Telegram then fetches /api/download/<token>.
 app.post('/api/sessions/:id/excel-link',(req,res)=>{
@@ -92,7 +96,7 @@ app.post('/api/sessions/:id/excel-link',(req,res)=>{
 app.post('/api/sessions/:id/excel-to-chat',async(req,res)=>{
  if(!requireCompleted(req,res))return;
  if(!/^\d+$/.test(req.owner))return res.status(400).json({error:'Отправка в чат доступна только при входе из Telegram'});
- const buffer=await createExcel(await getRows(req.scanSession.id),zone);
+ const buffer=await createExcel(await getRows(req.scanSession.id),customer);
  const form=new FormData();
  form.append('chat_id',req.owner);
  form.append('caption',`ReScan · сессия № ${req.scanSession.id.slice(0,8)}`);

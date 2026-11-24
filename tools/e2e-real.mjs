@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { preview } from 'vite';
 import { parsePower } from '../shared/label.js';
 import { createExcel } from '../server/excel.js';
+import { readCustomer } from '../server/customer.js';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { basename } from 'node:path';
 import { chromium } from '@playwright/test';
@@ -57,11 +58,11 @@ try {
   const book = new ExcelJS.Workbook();
   await book.xlsx.readFile(file);
   const sheet = book.worksheets[0];
-  const row = sheet.getRow(2);
-  const excel = { columns: sheet.columnCount, rows: sheet.rowCount - 1, date: row.getCell(1).value, model: row.getCell(2).value, power: row.getCell(3).value, powerType: typeof row.getCell(3).value, serial: row.getCell(4).value, serialType: typeof row.getCell(4).value };
+  const row = sheet.getRow(7);
+  const excel = { sheet: sheet.name, secondLens: sheet.getCell('B8').value, serial: row.getCell(2).value, serialType: typeof row.getCell(2).value, model: row.getCell(3).value, diopter: row.getCell(4).value };
   const session = (await page.locator('.session-bar').textContent()).match(/№ (\w+)/)?.[1];
   console.log(JSON.stringify({ photo, ocrMs, fields: report, excel, testSessionPrefix: session }, null, 1));
-  const ok = excel.columns === 4 && excel.rows === 1 && excel.model === truth.model && excel.power === Number(truth.power) && excel.serial === truth.serial;
+  const ok = excel.sheet === 'Consignment Order' && excel.secondLens === null && excel.model === truth.model && excel.diopter === Math.round(Number(truth.power) * 100) / 10 && excel.serial === truth.serial.replace(/\s/g, '');
   console.log(ok ? 'E2E OK' : 'E2E MISMATCH');
   process.exitCode = ok ? 0 : 1;
 } finally {
@@ -89,7 +90,7 @@ function memoryApi() {
       rows.push(row); return route.fulfill({ json: row });
     }
     if (path.endsWith('/complete')) { sessions.get(id).completed_at = new Date().toISOString(); return route.fulfill({ json: { ok: true } }); }
-    if (path.endsWith('/excel')) return route.fulfill({ status: 200, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', body: Buffer.from(await createExcel(rows.filter(r => r.session_id === id), 'Europe/Moscow')) });
+    if (path.endsWith('/excel')) return route.fulfill({ status: 200, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', body: Buffer.from(await createExcel(rows.filter(r => r.session_id === id), readCustomer())) });
     return route.fulfill({ json: { session: sessions.get(id), rows: rows.filter(r => r.session_id === id) } });
   };
 }

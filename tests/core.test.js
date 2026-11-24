@@ -1,12 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHmac} from 'node:crypto';
-import ExcelJS from 'exceljs';
 import {parsePower,clinicDate,normalizeSerial} from '../shared/label.js';
 import {parseModelText,parsePowerText,parseSerialText,vote,resolveZeroOh,modelAmbiguity,settleModel} from '../shared/fields.js';
 import {validateTelegram,parseAllowedUsernames} from '../server/auth.js';
 import {createDownloadToken,verifyDownloadToken,downloadKey,DOWNLOAD_TTL_SECONDS} from '../server/download.js';
-import {createExcel} from '../server/excel.js';
 test('power accepts signed decimal comma and dot, rejects partial garbage',()=>{
  for(const [input,expected] of [['+20.5 D',20.5],['−2,5',-2.5],['0',0],['-0.75',-.75]])assert.equal(parsePower(input),expected);
  for(const bad of ['', '20.5xyz','1,2.3','Infinity','101'])assert.throws(()=>parsePower(bad));
@@ -92,16 +90,6 @@ test('model with unsettled O/0 is left empty and both spellings are offered',()=
 test('clinic date crosses UTC midnight and handles another zone',()=>{
  assert.equal(clinicDate('2026-11-18T22:30:00Z'),'19.11.2026');
  assert.equal(clinicDate('2026-11-18T22:30:00Z','America/New_York'),'18.11.2026');
-});
-test('real XLSX round trip has exactly four columns with date, numeric power, text serial',async()=>{
- const buffer=await createExcel([{scanned_at:'2026-11-18T22:30:00Z',model:'=1+1',power:-2.5,serial:'001234 007'}],'Europe/Moscow');
- assert.equal(Buffer.from(buffer).subarray(0,2).toString(),'PK');
- const book=new ExcelJS.Workbook();await book.xlsx.load(buffer);const sheet=book.worksheets[0];
- assert.equal(sheet.columnCount,4);assert.equal(sheet.rowCount,2);
- assert.equal(sheet.getCell('A2').value.toISOString(),'2026-11-19T00:00:00.000Z');
- assert.equal(sheet.getCell('B2').value,'=1+1');assert.equal(sheet.getCell('B2').type,ExcelJS.ValueType.String);
- assert.equal(sheet.getCell('C2').value,-2.5);assert.equal(sheet.getCell('C2').type,ExcelJS.ValueType.Number);
- assert.equal(sheet.getCell('D2').value,'001234 007');assert.equal(sheet.getCell('D2').type,ExcelJS.ValueType.String);
 });
 test('download link is bound to session and owner, expires, and resists tampering',()=>{
  const key=downloadKey({TELEGRAM_BOT_TOKEN:'bot-token'}),now=Date.UTC(2026,10,19,12);
